@@ -1,0 +1,25 @@
+name: Build instalador
+on:
+  push:
+  workflow_dispatch:
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install pyinstaller pystray pillow
+      - run: pyinstaller --noconsole --onefile --hidden-import pystray._win32 --name Raio --icon raio.ico --version-file version_info.txt raio.py
+      - run: python tools/empacotar_extensao.py
+      - run: choco install innosetup -y
+      - run: '& "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" installer.iss'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Raio-Setup
+          path: installer/Raio-Setup.exe
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Raio-Extensao
+          path: installer/Raio-Extensao-*.zip

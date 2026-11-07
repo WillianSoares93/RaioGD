@@ -1,0 +1,48 @@
+COMO GERAR O INSTALADOR (Raio-Setup.exe)
+
+ANTES DE GERAR: a pasta "extension" (a que tem o manifest.json) precisa ficar ao lado do raio.py e do
+installer.iss. O instalador copia essa pasta para {app}\extension.
+
+OPCAO A - No seu PC com Windows (mais rapido)
+1. Instale o Python 3.8+ (marque "Add Python to PATH"): https://python.org
+2. Instale o Inno Setup 6: https://jrsoftware.org/isdl.php
+3. De dois cliques em build.bat
+4. O instalador sera criado em: installer\Raio-Setup.exe
+
+OPCAO B - Sem instalar nada (GitHub Actions)
+1. Crie um repositorio no GitHub e envie todos os arquivos desta pasta
+   (inclusive a pasta .github).
+2. Abra a aba Actions > "Build instalador" e espere terminar.
+3. Baixe o arquivo Raio-Setup em "Artifacts".
+
+Obs.: o Windows SmartScreen pode avisar "editor desconhecido", pois o
+executavel nao e assinado digitalmente. Clique em "Mais informacoes" > "Executar assim mesmo".
+
+COMPONENTES DE VIDEO (yt-dlp, Deno e ffmpeg)
+O instalador tem a opcao "Baixar os componentes para baixar videos de sites" (marcada por padrao).
+Ela roda "Raio.exe --install-components", que baixa do GitHub o que faltar para a pasta
+%USERPROFILE%\.pydm\bin (cerca de 250 MB). Se a opcao for desmarcada, ou se outro usuario do
+computador abrir o Raio, ele oferece a instalacao na primeira vez que um video for pedido.
+Para instalar a qualquer momento: Raio.exe --install-components
+
+EXTENSAO DO NAVEGADOR
+Com os IDs da loja preenchidos em installer.iss (ChromeExtId/EdgeExtId), o instalador registra a extensao no
+Chrome e no Edge e eles a instalam sozinhos na proxima abertura; o usuario so clica em "Ativar extensao" no aviso.
+Sem os IDs, o instalador copia a extensao para a pasta do Raio e, na ultima tela, oferece o passo a passo manual
+(Raio.exe --install-extension: Modo do desenvolvedor > Carregar sem compactacao). O mesmo passo a passo esta em
+Tarefas > Instalar extensao do navegador. Para publicar a extensao nas lojas, veja o arquivo LOJA.md.
+O zip para enviar a loja e gerado por: python tools\empacotar_extensao.py (tambem sai no build.bat e no GitHub Actions).
+
+AO DESINSTALAR
+O desinstalador fecha o Raio, apaga os componentes de video (%USERPROFILE%\.pydm\bin) e remove o
+"iniciar com o Windows". A lista de downloads e as configuracoes (%USERPROFILE%\.pydm) sao mantidas.
+Se a extensao foi instalada pela loja, o navegador a remove sozinho na proxima abertura; se foi carregada manualmente, remova-a em chrome://extensions.
+
+IDENTIDADE VISUAL (icone, nome do arquivo e arte do instalador)
+raio.ico              icone do Raio.exe, do instalador e dos atalhos
+version_info.txt      dados do arquivo (nome e descricao que aparecem em Propriedades e no Gerenciador de Tarefas)
+assets\               imagens do assistente de instalacao e o icone em 1024 px
+tools\gerar_icones.py gera tudo isso de novo (pip install pillow; python tools\gerar_icones.py).
+                      Depois de trocar o desenho, cole o conteudo de assets\icone_embutido.txt no raio.py
+                      (bloco ICON_PNG_B64), que e o icone da janela e da bandeja.
+O Windows guarda icones em cache: se o icone antigo continuar aparecendo, reinicie o Explorer ou o computador.
