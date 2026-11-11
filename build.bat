@@ -1,8 +1,8 @@
 @echo off
 echo === Instalando PyInstaller ===
-py -m pip install --upgrade pyinstaller pystray pillow || goto erro
+py -m pip install --upgrade pyinstaller pystray pillow truststore || goto erro
 echo === Gerando Raio.exe ===
-py -m PyInstaller --noconsole --onefile --hidden-import pystray._win32 --name Raio --icon raio.ico --version-file version_info.txt raio.py || goto erro
+py -m PyInstaller --noconsole --onefile --hidden-import pystray._win32 --hidden-import truststore --name Raio --icon raio.ico --version-file version_info.txt raio.py || goto erro
 echo === Empacotando a extensao (zip para a loja) ===
 py tools\empacotar_extensao.py || goto erro
 set ISCC="%ProgramFiles(x86)%\Inno Setup 6\ISCC.exe"
