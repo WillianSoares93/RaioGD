@@ -7,7 +7,7 @@
 ; Os dois vazios = o instalador NÃO registra nada e usa só o passo a passo manual (Raio.exe --install-extension).
 ; Preenchido = o navegador instala a extensão sozinho na próxima abertura e mostra um aviso para o usuário
 ; clicar em "Ativar extensão" (o Chrome e o Edge exigem esse clique para extensões instaladas por programas).
-#define ChromeExtId ""
+#define ChromeExtId "pgepiikcbnmhiaakbokajoolfpbiceae"
 #define EdgeExtId ""
 #define ChromeUpdateUrl "https://clients2.google.com/service/update2/crx"
 #define EdgeUpdateUrl "https://edge.microsoft.com/extensionwebstorebase/v1/crx"
