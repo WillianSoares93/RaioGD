@@ -30,6 +30,7 @@ from datetime import datetime
 from email.utils import parsedate_to_datetime
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 import urllib.request, urllib.parse
+import ssl
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox, simpledialog
 
@@ -189,6 +190,23 @@ def center_front(win, offset=0, keep_top=False):
         pass
 
 
+def _make_ssl_context():
+    """Contexto TLS que valida pelo repositório de certificados do Windows, como o navegador (completa cadeias
+    incompletas e baixa raízes sob demanda). Sem a biblioteca 'truststore', cai no padrão do Python."""
+    try:
+        import truststore
+        return truststore.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    except Exception:
+        return ssl.create_default_context()
+
+
+SSL_CTX = _make_ssl_context()
+
+
+def http_open(request, timeout=20):
+    return urllib.request.urlopen(request, timeout=timeout, context=SSL_CTX)
+
+
 def req(url, headers=None):
     h = {"User-Agent": GLOBAL.get("ua") or UA}
     h.update(headers or {})
@@ -197,7 +215,7 @@ def req(url, headers=None):
 
 def probe(url, headers=None):
     """Descobre tamanho, suporte a Range e nome do arquivo."""
-    with urllib.request.urlopen(req(url, {**(headers or {}), "Range": "bytes=0-0"}), timeout=20) as r:
+    with http_open(req(url, {**(headers or {}), "Range": "bytes=0-0"}), 20) as r:
         cr, cl = r.headers.get("Content-Range"), r.headers.get("Content-Length")
         size, resumable = None, False
         if r.status == 206 and cr:
@@ -763,7 +781,7 @@ class Download:
                     h = dict(self.headers)
                     if self.resumable:
                         h["Range"] = f"bytes={seg[2]}-{seg[1] if seg[1] >= 0 else ''}"
-                    with urllib.request.urlopen(req(self.url, h), timeout=20) as r:
+                    with http_open(req(self.url, h), 20) as r:
                         lm = r.headers.get("Last-Modified")
                         if lm:
                             if self.last_modified and lm != self.last_modified and not GLOBAL.get("ignore_mtime"):
@@ -2748,7 +2766,7 @@ class ComponentInstaller:
     # ---------- thread de download ----------
     def _download(self, url, dest, label):
         tmp = dest + ".part"
-        with urllib.request.urlopen(req(url), timeout=30) as r, open(tmp, "wb") as f:
+        with http_open(req(url), 30) as r, open(tmp, "wb") as f:
             total, got = int(r.headers.get("Content-Length") or 0), 0
             while True:
                 if self.cancel_flag.is_set():
