@@ -110,7 +110,7 @@ DEFAULT_VIDEO = {"enabled": True, "audio_formats": ["mp3-320", "mp3-192", "mp3-1
                  "embed_meta": True, "ytdlp": "", "ffmpeg": "", "video_cat": "Vídeo", "audio_cat": "Música"}
 # IDs da extensão nas lojas (os mesmos do installer.iss). Vazio = a extensão ainda não foi publicada.
 # Com ID, o diálogo da extensão oferece abrir a página da loja (o instalador já registra a extensão sozinho).
-CHROME_EXT_ID = ""    # Chrome Web Store
+CHROME_EXT_ID = "pgepiikcbnmhiaakbokajoolfpbiceae"    # Chrome Web Store
 EDGE_EXT_ID = ""      # Microsoft Edge Add-ons (se vazio, o Edge usa a página da Chrome Web Store)
 CHROME_STORE_URL = "https://chromewebstore.google.com/detail/{}"
 EDGE_STORE_URL = "https://microsoftedge.microsoft.com/addons/detail/{}"
