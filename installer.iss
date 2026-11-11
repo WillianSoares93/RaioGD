@@ -49,19 +49,20 @@ Name: "{autodesktop}\Raio"; Filename: "{app}\Raio.exe"; Tasks: desktopicon
 
 #ifdef HasStore
 [Registry]
-; O Chrome e o Edge leem a chave da visão de 32 bits (Wow6432Node) e, em alguns casos, a de 64 bits: gravamos nas duas.
+; O Chrome e o Edge leem a chave da visão de 32 bits (Wow6432Node) e, em alguns casos, a de 64 bits: gravamos nas duas
+; (HKLM32 = visão de 32 bits; HKLM64 = visão de 64 bits, só no Windows de 64 bits, por isso o Check: IsWin64).
 ; Ao desinstalar, as chaves somem (uninsdeletekey) e o navegador remove a extensão na próxima abertura.
 #if ChromeExtId != ""
-Root: HKLM; Subkey: "Software\Google\Chrome\Extensions\{#ChromeExtId}"; ValueType: string; ValueName: "update_url"; ValueData: "{#ChromeUpdateUrl}"; Flags: 32bit uninsdeletekey
-Root: HKLM; Subkey: "Software\Google\Chrome\Extensions\{#ChromeExtId}"; ValueType: string; ValueName: "update_url"; ValueData: "{#ChromeUpdateUrl}"; Flags: uninsdeletekey
+Root: HKLM32; Subkey: "Software\Google\Chrome\Extensions\{#ChromeExtId}"; ValueType: string; ValueName: "update_url"; ValueData: "{#ChromeUpdateUrl}"; Flags: uninsdeletekey
+Root: HKLM64; Subkey: "Software\Google\Chrome\Extensions\{#ChromeExtId}"; ValueType: string; ValueName: "update_url"; ValueData: "{#ChromeUpdateUrl}"; Flags: uninsdeletekey; Check: IsWin64
 #endif
 #if EdgeExtId != ""
-Root: HKLM; Subkey: "Software\Microsoft\Edge\Extensions\{#EdgeExtId}"; ValueType: string; ValueName: "update_url"; ValueData: "{#EdgeUpdateUrl}"; Flags: 32bit uninsdeletekey
-Root: HKLM; Subkey: "Software\Microsoft\Edge\Extensions\{#EdgeExtId}"; ValueType: string; ValueName: "update_url"; ValueData: "{#EdgeUpdateUrl}"; Flags: uninsdeletekey
+Root: HKLM32; Subkey: "Software\Microsoft\Edge\Extensions\{#EdgeExtId}"; ValueType: string; ValueName: "update_url"; ValueData: "{#EdgeUpdateUrl}"; Flags: uninsdeletekey
+Root: HKLM64; Subkey: "Software\Microsoft\Edge\Extensions\{#EdgeExtId}"; ValueType: string; ValueName: "update_url"; ValueData: "{#EdgeUpdateUrl}"; Flags: uninsdeletekey; Check: IsWin64
 #else
 ; sem ID próprio no Edge Add-ons: o Edge instala a extensão da Chrome Web Store
-Root: HKLM; Subkey: "Software\Microsoft\Edge\Extensions\{#ChromeExtId}"; ValueType: string; ValueName: "update_url"; ValueData: "{#ChromeUpdateUrl}"; Flags: 32bit uninsdeletekey
-Root: HKLM; Subkey: "Software\Microsoft\Edge\Extensions\{#ChromeExtId}"; ValueType: string; ValueName: "update_url"; ValueData: "{#ChromeUpdateUrl}"; Flags: uninsdeletekey
+Root: HKLM32; Subkey: "Software\Microsoft\Edge\Extensions\{#ChromeExtId}"; ValueType: string; ValueName: "update_url"; ValueData: "{#ChromeUpdateUrl}"; Flags: uninsdeletekey
+Root: HKLM64; Subkey: "Software\Microsoft\Edge\Extensions\{#ChromeExtId}"; ValueType: string; ValueName: "update_url"; ValueData: "{#ChromeUpdateUrl}"; Flags: uninsdeletekey; Check: IsWin64
 #endif
 
 [Messages]
