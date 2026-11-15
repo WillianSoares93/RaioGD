@@ -499,6 +499,157 @@ class PixelIcons:
         return img
 
 
+def _dib_para_rgba(cor, mascara, w, h):
+    """Converte os bytes BGRA de um ícone do Windows em RGBA. Ícones antigos (sem canal alfa) usam a máscara."""
+    out = bytearray(cor)
+    out[0::4], out[2::4] = cor[2::4], cor[0::4]          # troca B <-> R
+    if not any(cor[3::4]):                                # sem transparência própria: usa a máscara (branco = vazio)
+        out[3::4] = bytes(0 if (mascara[i * 4] or mascara[i * 4 + 1] or mascara[i * 4 + 2]) else 255
+                          for i in range(w * h))
+    return bytes(out)
+
+
+def _rgba_para_png(w, h, rgba):
+    """PNG RGBA simples (só com a biblioteca padrão): o Tk lê direto, sem precisar do Pillow."""
+    import struct, zlib
+    linhas = b"".join(b"\x00" + rgba[y * w * 4:(y + 1) * w * 4] for y in range(h))
+
+    def bloco(tipo, dados):
+        return (struct.pack(">I", len(dados)) + tipo + dados
+                + struct.pack(">I", zlib.crc32(tipo + dados) & 0xFFFFFFFF))
+    return (b"\x89PNG\r\n\x1a\n" + bloco(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 6, 0, 0, 0))
+            + bloco(b"IDAT", zlib.compress(linhas)) + bloco(b"IEND", b""))
+
+
+class ShellIcons:
+    """Ícones de arquivo do Windows (os mesmos do Explorer: o do WinRAR para .zip, o do player para .mp3...), como no IDM.
+    Só funciona no Windows. Se algo falhar, devolve None e o Raio usa os ícones desenhados por ele."""
+
+    def __init__(self):
+        self.cache = {}
+        self.ok = sys.platform.startswith("win")
+
+    def small(self, nome):      # 16x16, para a lista de downloads
+        return self._obter(nome, 16)
+
+    def large(self, nome):      # 48x48, para as janelas de informação e de download completo
+        return self._obter(nome, 48)
+
+    def _obter(self, nome, tam):
+        if not self.ok:
+            return None
+        ext = os.path.splitext(nome or "")[1].lower()[:12] or ".bin"
+        chave = (ext, tam)
+        if chave not in self.cache:
+            img = None
+            try:
+                png = self._png(ext, tam)
+                if png:
+                    img = tk.PhotoImage(data=base64.b64encode(png))
+            except Exception as ex:
+                log(f"Ícone do Windows indisponível para {ext}: {ex!r}")
+            self.cache[chave] = img      # o Tk apaga a imagem se ninguém guardar uma referência: o cache guarda
+        return self.cache[chave]
+
+    @staticmethod
+    def _png(ext, tam):
+        import ctypes
+        from ctypes import wintypes as wt
+        shell32, user32, gdi32, comctl = ctypes.windll.shell32, ctypes.windll.user32, ctypes.windll.gdi32, ctypes.windll.comctl32
+
+        class SHFILEINFOW(ctypes.Structure):
+            _fields_ = [("hIcon", ctypes.c_void_p), ("iIcon", ctypes.c_int), ("dwAttributes", wt.DWORD),
+                        ("szDisplayName", wt.WCHAR * 260), ("szTypeName", wt.WCHAR * 80)]
+
+        class ICONINFO(ctypes.Structure):
+            _fields_ = [("fIcon", wt.BOOL), ("xHotspot", wt.DWORD), ("yHotspot", wt.DWORD),
+                        ("hbmMask", ctypes.c_void_p), ("hbmColor", ctypes.c_void_p)]
+
+        class BITMAP(ctypes.Structure):
+            _fields_ = [("bmType", wt.LONG), ("bmWidth", wt.LONG), ("bmHeight", wt.LONG), ("bmWidthBytes", wt.LONG),
+                        ("bmPlanes", wt.WORD), ("bmBitsPixel", wt.WORD), ("bmBits", ctypes.c_void_p)]
+
+        class BITMAPINFOHEADER(ctypes.Structure):
+            _fields_ = [("biSize", wt.DWORD), ("biWidth", wt.LONG), ("biHeight", wt.LONG), ("biPlanes", wt.WORD),
+                        ("biBitCount", wt.WORD), ("biCompression", wt.DWORD), ("biSizeImage", wt.DWORD),
+                        ("biXPelsPerMeter", wt.LONG), ("biYPelsPerMeter", wt.LONG), ("biClrUsed", wt.DWORD),
+                        ("biClrImportant", wt.DWORD)]
+
+        class GUID(ctypes.Structure):
+            _fields_ = [("D1", wt.DWORD), ("D2", wt.WORD), ("D3", wt.WORD), ("D4", ctypes.c_ubyte * 8)]
+
+        vp = ctypes.c_void_p
+        shell32.SHGetFileInfoW.argtypes = [wt.LPCWSTR, wt.DWORD, ctypes.POINTER(SHFILEINFOW), wt.UINT, wt.UINT]
+        shell32.SHGetFileInfoW.restype = ctypes.c_size_t
+        shell32.SHGetImageList.argtypes = [ctypes.c_int, ctypes.POINTER(GUID), ctypes.POINTER(vp)]
+        shell32.SHGetImageList.restype = ctypes.c_long
+        comctl.ImageList_GetIcon.argtypes = [vp, ctypes.c_int, wt.UINT]
+        comctl.ImageList_GetIcon.restype = vp
+        user32.GetIconInfo.argtypes = [vp, ctypes.POINTER(ICONINFO)]
+        user32.GetIconInfo.restype = wt.BOOL
+        user32.DestroyIcon.argtypes = [vp]
+        user32.GetDC.argtypes = [vp]
+        user32.GetDC.restype = vp
+        user32.ReleaseDC.argtypes = [vp, vp]
+        gdi32.GetObjectW.argtypes = [vp, ctypes.c_int, vp]
+        gdi32.GetObjectW.restype = ctypes.c_int
+        gdi32.GetDIBits.argtypes = [vp, vp, wt.UINT, wt.UINT, vp, vp, wt.UINT]
+        gdi32.GetDIBits.restype = ctypes.c_int
+        gdi32.DeleteObject.argtypes = [vp]
+
+        # a extensão basta: com USEFILEATTRIBUTES o Windows não precisa que o arquivo exista
+        fi = SHFILEINFOW()
+        caminho = "arquivo" + ext
+        hicon = None
+        if tam > 16:        # lista de ícones "extra grande" do sistema (48x48)
+            shell32.SHGetFileInfoW(caminho, 0x80, ctypes.byref(fi), ctypes.sizeof(fi), 0x4000 | 0x10)   # SYSICONINDEX
+            iid = GUID(0x46EB5926, 0x582E, 0x4017, (ctypes.c_ubyte * 8)(0x9F, 0xDF, 0xE8, 0x99, 0x8D, 0xAA, 0x09, 0x50))
+            lista = vp()
+            if shell32.SHGetImageList(2, ctypes.byref(iid), ctypes.byref(lista)) == 0 and lista.value:   # SHIL_EXTRALARGE
+                hicon = comctl.ImageList_GetIcon(lista, fi.iIcon, 1)                                      # ILD_TRANSPARENT
+        if not hicon:       # pequeno (16x16) ou, se a lista grande falhar, o ícone de 32x32
+            fi = SHFILEINFOW()
+            sinal = 0x100 | 0x10 | (0x1 if tam <= 16 else 0x0)           # ICON | USEFILEATTRIBUTES | SMALL/LARGE
+            shell32.SHGetFileInfoW(caminho, 0x80, ctypes.byref(fi), ctypes.sizeof(fi), sinal)
+            hicon = fi.hIcon
+        if not hicon:
+            return None
+        info = ICONINFO()
+        hdc = None
+        try:
+            if not user32.GetIconInfo(hicon, ctypes.byref(info)) or not info.hbmColor:
+                return None
+            bm = BITMAP()
+            gdi32.GetObjectW(info.hbmColor, ctypes.sizeof(bm), ctypes.byref(bm))
+            w, h = bm.bmWidth, bm.bmHeight
+            if not (0 < w <= 256 and 0 < h <= 256):
+                return None
+            hdc = user32.GetDC(None)
+
+            def ler(hbm, linhas):
+                bih = BITMAPINFOHEADER()
+                bih.biSize, bih.biWidth, bih.biHeight = ctypes.sizeof(bih), w, -linhas   # altura negativa = de cima p/ baixo
+                bih.biPlanes, bih.biBitCount = 1, 32
+                buf = (ctypes.c_ubyte * (w * linhas * 4))()
+                gdi32.GetDIBits(hdc, hbm, 0, linhas, buf, ctypes.byref(bih), 0)
+                return bytes(buf)
+
+            cor = ler(info.hbmColor, h)
+            mascara = ler(info.hbmMask, h) if info.hbmMask else b"\x00" * (w * h * 4)
+            return _rgba_para_png(w, h, _dib_para_rgba(cor, mascara, w, h))
+        finally:
+            if hdc:
+                user32.ReleaseDC(None, hdc)
+            if info.hbmColor:
+                gdi32.DeleteObject(info.hbmColor)
+            if info.hbmMask:
+                gdi32.DeleteObject(info.hbmMask)
+            user32.DestroyIcon(hicon)
+
+
+SHELL_ICONS = ShellIcons()
+
+
 class FileChanged(Exception):
     """O arquivo no servidor mudou (data de modificação diferente) ao retomar um download."""
 
@@ -1697,6 +1848,11 @@ class InfoDialog:
         ext = os.path.splitext(name)[1].lstrip(".")[:4].upper()
         c = self.icon
         c.delete("all")
+        img = SHELL_ICONS.large(name)
+        if img:
+            c.image_ref = img       # o Tk só mantém a imagem enquanto houver uma referência
+            c.create_image(27, 33, image=img)
+            return
         c.create_polygon(8, 4, 34, 4, 46, 16, 46, 62, 8, 62, fill="white", outline="#8a8a8a")
         c.create_polygon(34, 4, 34, 16, 46, 16, fill="#e4e4e4", outline="#8a8a8a")
         if ext:
@@ -2181,8 +2337,13 @@ class CompleteDialog:
             bg = "#f0f0f0"
         ic = tk.Canvas(top, width=54, height=66, highlightthickness=0, bd=0, bg=bg)
         ic.pack(side="left")
-        ic.create_polygon(8, 4, 34, 4, 46, 16, 46, 62, 8, 62, fill="white", outline="#8a8a8a")
-        ic.create_polygon(34, 4, 34, 16, 46, 16, fill="#e4e4e4", outline="#8a8a8a")
+        img = SHELL_ICONS.large(os.path.basename(d.path or ""))
+        if img:
+            ic.image_ref = img
+            ic.create_image(27, 29, image=img)
+        else:
+            ic.create_polygon(8, 4, 34, 4, 46, 16, 46, 62, 8, 62, fill="white", outline="#8a8a8a")
+            ic.create_polygon(34, 4, 34, 16, 46, 16, fill="#e4e4e4", outline="#8a8a8a")
         ic.create_oval(26, 42, 50, 66, fill="#2e9e44", outline="white", width=2)
         ic.create_text(38, 54, text="\u2713", fill="white", font=("Segoe UI", 11, "bold"))
         tx = ttk.Frame(top)
@@ -4046,7 +4207,7 @@ class App:
             name, vals = self.row_for(d)
             if self._rows.get(iid) != (name, vals):
                 self._rows[iid] = (name, vals)
-                self.tree.item(iid, text=name, values=vals, image=self.icons.get(kind_for(name)))
+                self.tree.item(iid, text=name, values=vals, image=(SHELL_ICONS.small(name) or self.icons.get(kind_for(name))))
 
     # ---------- estado dos botões e menus ----------
     def selected(self):
