@@ -36,6 +36,7 @@ Name: "brazilianportuguese"; MessagesFile: "compiler:Languages\BrazilianPortugue
 
 [Tasks]
 Name: "desktopicon"; Description: "Criar atalho na área de trabalho"
+Name: "autostart"; Description: "Iniciar o Raio junto com o Windows (fica na bandeja; dá para desativar depois em Opções)"
 Name: "videocomponents"; Description: "Baixar os componentes para baixar vídeos de sites (yt-dlp, Deno e ffmpeg - cerca de 250 MB, precisa de internet)"
 
 [Files]
@@ -46,6 +47,11 @@ Source: "extension\*"; DestDir: "{app}\extension"; Flags: ignoreversion recurses
 [Icons]
 Name: "{group}\Raio"; Filename: "{app}\Raio.exe"
 Name: "{autodesktop}\Raio"; Filename: "{app}\Raio.exe"; Tasks: desktopicon
+
+[Registry]
+; "Iniciar com o Windows": é exatamente o valor que a caixa das Opções do Raio lê e grava (HKCU\...\Run, nome "Raio",
+; abrindo direto na bandeja). Marcada por padrão; ao desmarcar em Opções o próprio Raio apaga este valor.
+Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "Raio"; ValueData: """{app}\Raio.exe"" --tray"; Tasks: autostart; Flags: uninsdeletevalue
 
 #ifdef HasStore
 [Registry]
