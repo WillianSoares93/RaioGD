@@ -36,7 +36,7 @@ Name: "brazilianportuguese"; MessagesFile: "compiler:Languages\BrazilianPortugue
 
 [Tasks]
 Name: "desktopicon"; Description: "Criar atalho na área de trabalho"
-Name: "autostart"; Description: "Iniciar o Raio junto com o Windows (fica na bandeja; dá para desativar depois em Opções)"
+Name: "autostart"; Description: "Iniciar o Raio junto com o Windows"
 Name: "videocomponents"; Description: "Baixar os componentes para baixar vídeos de sites (yt-dlp, Deno e ffmpeg - cerca de 250 MB, precisa de internet)"
 
 [Files]
