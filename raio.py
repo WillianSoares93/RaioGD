@@ -3048,6 +3048,305 @@ def find_browser(key):
     return None
 
 
+# ===================== Apoie o Raio (Pix com QR code) =====================
+# Preencha os dados abaixo para a opção "Apoiar o Raio" aparecer no menu Ajuda. Tudo vazio = a opção não aparece.
+PIX_KEY = "pix.cwsm@gmail.com"       # sua chave Pix: e-mail, telefone (+55...), CPF/CNPJ (só números) ou chave aleatória (a mais indicada)
+PIX_NAME = "Cicero Willian S Moreira"      # nome do recebedor, como aparece no banco (até 25 letras)
+PIX_CITY = "Exu"      # cidade do recebedor (até 15 letras)
+DONATE_URL = ""    # opcional: página de apoio (Apoia.se, GitHub Sponsors, Buy Me a Coffee...)
+
+
+def _crc16(dados):
+    """CRC16/CCITT-FALSE, o que o Pix usa no fim do código."""
+    crc = 0xFFFF
+    for b in dados:
+        crc ^= b << 8
+        for _ in range(8):
+            crc = ((crc << 1) ^ 0x1021) & 0xFFFF if crc & 0x8000 else (crc << 1) & 0xFFFF
+    return crc
+
+
+def _pix_texto(texto, limite):
+    import unicodedata
+    t = unicodedata.normalize("NFKD", texto or "").encode("ascii", "ignore").decode()
+    return re.sub(r"[^A-Za-z0-9 ]", "", t).strip().upper()[:limite]
+
+
+def pix_payload(chave, nome, cidade):
+    """Código "Pix copia e cola" (QR estático, sem valor definido: quem doa escolhe quanto)."""
+    def tlv(i, v):
+        return f"{i}{len(v):02d}{v}"
+    conta = tlv("00", "BR.GOV.BCB.PIX") + tlv("01", (chave or "").strip())
+    corpo = (tlv("00", "01") + tlv("01", "11") + tlv("26", conta) + tlv("52", "0000") + tlv("53", "986")
+             + tlv("58", "BR") + tlv("59", _pix_texto(nome, 25) or "RAIO") + tlv("60", _pix_texto(cidade, 15) or "BRASIL")
+             + tlv("62", tlv("05", "***")) + "6304")
+    return corpo + f"{_crc16(corpo.encode()):04X}"
+
+
+# ---- gerador de QR code (nível de correção M, versões 1 a 10 = até 213 bytes), só com a biblioteca padrão ----
+_QR_M = {1: (10, [(1, 16)]), 2: (16, [(1, 28)]), 3: (26, [(1, 44)]), 4: (18, [(2, 32)]), 5: (24, [(2, 43)]),
+         6: (16, [(4, 27)]), 7: (18, [(4, 31)]), 8: (22, [(2, 38), (2, 39)]), 9: (22, [(3, 36), (2, 37)]),
+         10: (26, [(4, 43), (1, 44)])}    # versão: (palavras de correção por bloco, [(nº de blocos, dados por bloco)])
+_QR_ALINHA = {1: [], 2: [6, 18], 3: [6, 22], 4: [6, 26], 5: [6, 30], 6: [6, 34], 7: [6, 22, 38], 8: [6, 24, 42],
+              9: [6, 26, 46], 10: [6, 28, 50]}
+_GF_EXP, _GF_LOG = [0] * 512, [0] * 256
+_x = 1
+for _i in range(255):
+    _GF_EXP[_i], _GF_LOG[_x] = _x, _i
+    _x <<= 1
+    if _x & 0x100:
+        _x ^= 0x11D
+for _i in range(255, 512):
+    _GF_EXP[_i] = _GF_EXP[_i - 255]
+
+
+def _gf_mul(a, b):
+    return 0 if a == 0 or b == 0 else _GF_EXP[_GF_LOG[a] + _GF_LOG[b]]
+
+
+def _rs_resto(dados, grau):
+    """Palavras de correção de erro (Reed-Solomon) de um bloco de dados."""
+    g = [1]
+    for i in range(grau):
+        novo = [0] * (len(g) + 1)
+        for j, c in enumerate(g):
+            novo[j] ^= c
+            novo[j + 1] ^= _gf_mul(c, _GF_EXP[i])
+        g = novo
+    resto = [0] * grau
+    for b in dados:
+        fator = b ^ resto[0]
+        resto = resto[1:] + [0]
+        if fator:
+            for i in range(grau):
+                resto[i] ^= _gf_mul(g[i + 1], fator)
+    return resto
+
+
+def qr_matriz(texto, mascara=None):
+    """Devolve o QR como lista de linhas de True (módulo escuro) / False."""
+    dados = texto.encode("utf-8")
+    for ver in range(1, 11):
+        ec_n, blocos = _QR_M[ver]
+        cap = sum(n * d for n, d in blocos)
+        bits_cont = 8 if ver <= 9 else 16
+        if 4 + bits_cont + 8 * len(dados) <= cap * 8:
+            break
+    else:
+        raise ValueError("texto grande demais para o QR code")
+    bits = []
+
+    def add(valor, n):
+        bits.extend((valor >> i) & 1 for i in range(n - 1, -1, -1))
+    add(0b0100, 4)                      # modo "bytes"
+    add(len(dados), bits_cont)
+    for b in dados:
+        add(b, 8)
+    add(0, min(4, cap * 8 - len(bits)))
+    while len(bits) % 8:
+        bits.append(0)
+    pal = [int("".join(map(str, bits[i:i + 8])), 2) for i in range(0, len(bits), 8)]
+    pad = 0xEC
+    while len(pal) < cap:
+        pal.append(pad)
+        pad ^= 0xEC ^ 0x11
+    # divide em blocos, calcula a correção de cada um e intercala
+    lista, pos = [], 0
+    for n, d in blocos:
+        for _ in range(n):
+            bloco = pal[pos:pos + d]
+            pos += d
+            lista.append((bloco, _rs_resto(bloco, ec_n)))
+    final = []
+    for i in range(max(len(b) for b, _ in lista)):
+        final += [b[i] for b, _ in lista if i < len(b)]
+    for i in range(ec_n):
+        final += [e[i] for _, e in lista]
+    fbits = [(w >> k) & 1 for w in final for k in range(7, -1, -1)] + [0] * (7 if 2 <= ver <= 6 else 0)
+
+    n = 17 + 4 * ver
+    mod = [[False] * n for _ in range(n)]
+    fun = [[False] * n for _ in range(n)]
+
+    def setf(x, y, escuro):
+        mod[y][x] = escuro
+        fun[y][x] = True
+    for i in range(n):                  # linhas de sincronismo
+        setf(6, i, i % 2 == 0)
+        setf(i, 6, i % 2 == 0)
+    for cx, cy in ((3, 3), (n - 4, 3), (3, n - 4)):      # os 3 quadrados dos cantos
+        for dy in range(-4, 5):
+            for dx in range(-4, 5):
+                x, y = cx + dx, cy + dy
+                if 0 <= x < n and 0 <= y < n:
+                    setf(x, y, max(abs(dx), abs(dy)) not in (2, 4))
+    ap = _QR_ALINHA[ver]
+    for i, cy in enumerate(ap):         # quadradinhos de alinhamento
+        for j, cx in enumerate(ap):
+            if (i == 0 and j == 0) or (i == 0 and j == len(ap) - 1) or (i == len(ap) - 1 and j == 0):
+                continue
+            for dy in range(-2, 3):
+                for dx in range(-2, 3):
+                    setf(cx + dx, cy + dy, max(abs(dx), abs(dy)) != 1)
+
+    def formato(msk):                   # nível M = 00
+        resto = msk
+        for _ in range(10):
+            resto = (resto << 1) ^ ((resto >> 9) * 0x537)
+        fb = ((msk << 10) | resto) ^ 0x5412
+
+        def bit(i):
+            return (fb >> i) & 1 != 0
+        for i in range(0, 6):
+            setf(8, i, bit(i))
+        setf(8, 7, bit(6))
+        setf(8, 8, bit(7))
+        setf(7, 8, bit(8))
+        for i in range(9, 15):
+            setf(14 - i, 8, bit(i))
+        for i in range(0, 8):
+            setf(n - 1 - i, 8, bit(i))
+        for i in range(8, 15):
+            setf(8, n - 15 + i, bit(i))
+        setf(8, n - 8, True)
+    formato(0)
+    if ver >= 7:                        # informação de versão
+        resto = ver
+        for _ in range(12):
+            resto = (resto << 1) ^ ((resto >> 11) * 0x1F25)
+        vb = (ver << 12) | resto
+        for i in range(18):
+            b = (vb >> i) & 1 != 0
+            a, c = n - 11 + i % 3, i // 3
+            setf(a, c, b)
+            setf(c, a, b)
+    i, right = 0, n - 1                 # dados em zigue-zague
+    while right >= 1:
+        if right == 6:
+            right = 5
+        for vert in range(n):
+            for j in range(2):
+                x = right - j
+                y = n - 1 - vert if ((right + 1) & 2) == 0 else vert
+                if not fun[y][x] and i < len(fbits):
+                    mod[y][x] = bool(fbits[i])
+                    i += 1
+        right -= 2
+
+    regras = (lambda x, y: (x + y) % 2 == 0, lambda x, y: y % 2 == 0, lambda x, y: x % 3 == 0,
+              lambda x, y: (x + y) % 3 == 0, lambda x, y: (x // 3 + y // 2) % 2 == 0,
+              lambda x, y: x * y % 2 + x * y % 3 == 0, lambda x, y: (x * y % 2 + x * y % 3) % 2 == 0,
+              lambda x, y: ((x + y) % 2 + x * y % 3) % 2 == 0)
+
+    def aplicar(msk):
+        r = regras[msk]
+        for y in range(n):
+            for x in range(n):
+                if not fun[y][x] and r(x, y):
+                    mod[y][x] = not mod[y][x]
+
+    def penalidade():
+        p = 0
+        for linhas in (mod, list(zip(*mod))):
+            for lin in linhas:
+                run, cor = 1, lin[0]
+                for k in range(1, n):
+                    if lin[k] == cor:
+                        run += 1
+                    else:
+                        if run >= 5:
+                            p += run - 2
+                        cor, run = lin[k], 1
+                if run >= 5:
+                    p += run - 2
+                s = "".join("1" if v else "0" for v in lin)
+                p += 40 * (s.count("10111010000") + s.count("00001011101"))
+        for y in range(n - 1):
+            for x in range(n - 1):
+                if mod[y][x] == mod[y][x + 1] == mod[y + 1][x] == mod[y + 1][x + 1]:
+                    p += 3
+        escuros = sum(sum(l) for l in mod)
+        return p + 10 * max(0, -(-abs(escuros * 20 - n * n * 10) // (n * n)) - 1)
+
+    if mascara is None:                 # escolhe a máscara que deixa o desenho mais fácil de ler
+        melhor, menor = 0, None
+        for m in range(8):
+            aplicar(m)
+            formato(m)
+            pen = penalidade()
+            aplicar(m)
+            if menor is None or pen < menor:
+                melhor, menor = m, pen
+        mascara = melhor
+    aplicar(mascara)
+    formato(mascara)
+    return mod
+
+
+def qr_png(texto, borda=4):
+    """PNG do QR code (módulos pretos em fundo branco, com a margem de silêncio exigida pelos leitores)."""
+    m = qr_matriz(texto)
+    n = len(m)
+    esc = max(3, 330 // (n + 2 * borda))
+    dim = (n + 2 * borda) * esc
+    branco, preto = b"\xff\xff\xff\xff", b"\x00\x00\x00\xff"
+    margem = branco * (borda * esc)
+    linhas = []
+    for y in range(n):
+        lin = margem + b"".join((preto if v else branco) * esc for v in m[y]) + margem
+        linhas.extend([lin] * esc)
+    topo = [branco * dim] * (borda * esc)
+    return _rgba_para_png(dim, dim, b"".join(topo + linhas + topo)), dim
+
+
+class DonateDialog:
+    """"Apoiar o Raio": QR code do Pix, o código "copia e cola" e, se houver, o link de apoio.
+    O QR é gerado aqui mesmo, sem internet e sem enviar nada a ninguém."""
+
+    def __init__(self, app):
+        self.app = app
+        win = self.win = tk.Toplevel(app.root)
+        win.title("Apoiar o Raio")
+        win.transient(app.root)
+        win.resizable(False, False)
+        win.bind("<Escape>", lambda e: win.destroy())
+        f = ttk.Frame(win, padding=16)
+        f.pack(fill="both", expand=True)
+        ttk.Label(f, justify="center", wraplength=360,
+                  text="O Raio é gratuito e continua em desenvolvimento. Se ele é útil para você, considere apoiar o "
+                       "projeto com qualquer valor. Obrigado!").pack()
+        self.codigo = pix_payload(PIX_KEY, PIX_NAME, PIX_CITY) if PIX_KEY else ""
+        self.img = None
+        if self.codigo:
+            try:
+                self.img = tk.PhotoImage(data=base64.b64encode(qr_png(self.codigo)[0]))
+            except Exception as ex:
+                log(f"Apoiar: não foi possível gerar o QR code: {ex!r}")
+        if self.img:
+            tk.Label(f, image=self.img, bd=1, relief="solid", bg="white").pack(pady=(12, 4))
+            ttk.Label(f, text="Aponte a câmera ou o app do seu banco (Pix)").pack()
+        if self.codigo:
+            ttk.Label(f, text="Pix copia e cola:").pack(anchor="w", pady=(10, 2))
+            e = ttk.Entry(f, width=48)
+            e.insert(0, self.codigo)
+            e.configure(state="readonly")
+            e.pack(fill="x")
+            self.bcopia = ttk.Button(f, text="Copiar código Pix", command=self.copiar)
+            self.bcopia.pack(pady=(6, 0))
+        if DONATE_URL:
+            ttk.Button(f, text="Abrir página de apoio", command=self.abrir).pack(pady=(8, 0))
+        ttk.Button(f, text="Fechar", command=win.destroy).pack(pady=(12, 0))
+
+    def copiar(self):
+        self.win.clipboard_clear()
+        self.win.clipboard_append(self.codigo)
+        self.bcopia.configure(text="Código copiado!")
+
+    def abrir(self):
+        import webbrowser
+        webbrowser.open(DONATE_URL)
+
+
 class ExtensionDialog:
     """Passo a passo para instalar a extensão no Chrome/Edge. Os navegadores não deixam um programa instalar
     extensões sozinho, então o Raio facilita: abre a página de extensões e mostra a pasta que deve ser carregada."""
@@ -3962,6 +4261,9 @@ class App:
         sm.add_radiobutton(label="Ordem decrescente", variable=self.order_var, value="desc", command=self.on_sort_menu)
         v.add_separator()
         v.add_command(label="Selecionar tudo", command=self.select_all, accelerator="Ctrl+A")
+        if PIX_KEY or DONATE_URL:
+            aj = sub("Ajuda")
+            item(aj, None, "Apoiar o Raio...", self.donate_dialog)
 
     # ---------- barra de ferramentas ----------
     def build_toolbar(self):
@@ -4754,6 +5056,9 @@ class App:
 
     def extension_dialog(self):
         ExtensionDialog(self)
+
+    def donate_dialog(self):
+        DonateDialog(self)
 
     def show_properties(self):
         sel = self.selected()
