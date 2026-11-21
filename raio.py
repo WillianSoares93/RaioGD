@@ -3395,6 +3395,108 @@ def donate_box(pai, app, fundo=None):
     return box
 
 
+# ===================== Ajuda > Sobre =====================
+APP_NAME = "Raio Gerenciador de Downloads"
+APP_VERSION = "1.0"                 # mantenha igual ao AppVersion do installer.iss e ao version_info.txt
+APP_AUTHOR = "Willian Soares"       # aparece em Ajuda > Sobre; deixe "" para não mostrar
+APP_SITE = "https://github.com/WillianSoares93/RaioGD"
+APP_PRIVACY = APP_SITE + "/blob/main/PRIVACIDADE.md"
+
+
+class AboutDialog:
+    """Ajuda > Sobre: versão, o que o Raio faz, estado dos componentes, links e um botão que copia os dados
+    do programa (sem caminhos pessoais) para facilitar o suporte."""
+
+    def __init__(self, app):
+        self.app = app
+        win = self.win = tk.Toplevel(app.root)
+        win.title("Sobre o Raio")
+        win.transient(app.root)
+        win.resizable(False, False)
+        win.bind("<Escape>", lambda e: win.destroy())
+        f = ttk.Frame(win, padding=16)
+        f.pack(fill="both", expand=True)
+
+        top = ttk.Frame(f)
+        top.pack(fill="x")
+        try:
+            self.logo = tk.PhotoImage(data=ICON_PNG_B64[64])
+            tk.Label(top, image=self.logo).pack(side="left")
+        except Exception as ex:
+            log(f"Sobre: sem logo: {ex!r}")
+        tx = ttk.Frame(top)
+        tx.pack(side="left", padx=14)
+        ttk.Label(tx, text="Raio", font=("Segoe UI", 20, "bold")).pack(anchor="w")
+        ttk.Label(tx, text="Gerenciador de Downloads", font=("Segoe UI", 10)).pack(anchor="w")
+        ttk.Label(tx, text=f"Versão {APP_VERSION}", foreground="#555555").pack(anchor="w", pady=(2, 0))
+
+        ttk.Label(f, justify="left", wraplength=470,
+                  text="Baixa seus arquivos em várias conexões ao mesmo tempo, com pausa e retomada (mesmo depois de "
+                       "fechar o programa), fila, agendador e limite de velocidade. Captura os downloads do Chrome e "
+                       "do Edge pela extensão e baixa vídeos e áudios das páginas com yt-dlp e ffmpeg.").pack(
+            anchor="w", pady=(14, 0))
+
+        lf = ttk.LabelFrame(f, text="Informações", padding=8)
+        lf.pack(fill="x", pady=(12, 0))
+        lf.columnconfigure(1, weight=1)
+        for i, (rot, val) in enumerate(self.linhas()):
+            ttk.Label(lf, text=rot).grid(row=i, column=0, sticky="nw", padx=(0, 14), pady=1)
+            ttk.Label(lf, text=val, justify="left", wraplength=360).grid(row=i, column=1, sticky="w", pady=1)
+
+        lk = ttk.Frame(f)
+        lk.pack(fill="x", pady=(10, 0))
+        for txt, url in self.links():
+            ttk.Button(lk, text=txt, command=lambda u=url: self.abrir(u)).pack(side="left", padx=(0, 6))
+        ttk.Button(lk, text="Pasta de dados", command=lambda: App._open(APP_DIR)).pack(side="left")
+
+        ttk.Label(f, justify="left", wraplength=470, foreground="#555555",
+                  text="O Raio usa yt-dlp, FFmpeg e Deno (baixados para a pasta de dados do Raio), Pillow e pystray "
+                       "(ícone na bandeja) e truststore (certificados). Cada um deles segue a licença dos seus "
+                       "autores.").pack(anchor="w", pady=(12, 0))
+
+        bf = ttk.Frame(f)
+        bf.pack(pady=(14, 0))
+        self.bcopia = ttk.Button(bf, text="Copiar informações", command=self.copiar)
+        self.bcopia.pack(side="left", padx=4)
+        if PIX_KEY or DONATE_URL:
+            ttk.Button(bf, text="Apoiar o Raio", command=lambda: DonateDialog(app, pai=win)).pack(side="left", padx=4)
+        ttk.Button(bf, text="Fechar", command=win.destroy).pack(side="left", padx=4)
+        center_front(win)
+
+    def linhas(self):
+        import platform
+        ferr = media_tools_named(self.app.settings)
+        comp = "   ".join(f"{n}: {'instalado' if p else 'não instalado'}" for n, p in ferr.items())
+        bridge = (f"ativa (porta {PORT})" if self.app.bridge else f"indisponível (porta {PORT} em uso)")
+        out = []
+        if APP_AUTHOR:
+            out.append(("Desenvolvedor", APP_AUTHOR))
+        out += [("Navegador", f"integração {bridge}"), ("Vídeos", comp),
+                ("Sistema", f"{platform.system()} {platform.version()}  \u2022  Python {platform.python_version()}"),
+                ("Dados", APP_DIR)]
+        return out
+
+    def diagnostico(self):
+        itens = [f"{APP_NAME} {APP_VERSION}"]
+        itens += [f"{r}: {v}" for r, v in self.linhas() if r not in ("Desenvolvedor", "Dados")]
+        return "\n".join(itens)
+
+    def links(self):
+        out = [("Página do projeto", APP_SITE), ("Política de privacidade", APP_PRIVACY)]
+        if CHROME_EXT_ID:
+            out.append(("Extensão na loja", CHROME_STORE_URL.format(CHROME_EXT_ID)))
+        return out
+
+    def abrir(self, url):
+        import webbrowser
+        webbrowser.open(url)
+
+    def copiar(self):
+        self.win.clipboard_clear()
+        self.win.clipboard_append(self.diagnostico())
+        self.bcopia.configure(text="Copiado!")
+
+
 class ExtensionDialog:
     """Passo a passo para instalar a extensão no Chrome/Edge. Os navegadores não deixam um programa instalar
     extensões sozinho, então o Raio facilita: abre a página de extensões e mostra a pasta que deve ser carregada."""
@@ -4315,9 +4417,11 @@ class App:
         sm.add_radiobutton(label="Ordem decrescente", variable=self.order_var, value="desc", command=self.on_sort_menu)
         v.add_separator()
         v.add_command(label="Selecionar tudo", command=self.select_all, accelerator="Ctrl+A")
+        aj = sub("Ajuda")
         if PIX_KEY or DONATE_URL:
-            aj = sub("Ajuda")
             item(aj, None, "Apoiar o Raio...", self.donate_dialog)
+            aj.add_separator()
+        item(aj, None, "Sobre o Raio", self.about_dialog)
 
     # ---------- barra de ferramentas ----------
     def build_toolbar(self):
@@ -5125,6 +5229,9 @@ class App:
 
     def donate_dialog(self):
         DonateDialog(self)
+
+    def about_dialog(self):
+        AboutDialog(self)
 
     def show_properties(self):
         sel = self.selected()
