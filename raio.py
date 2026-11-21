@@ -254,7 +254,7 @@ def unique_path(folder, name):
 def load_cfg():
     s = {"categories": copy.deepcopy(DEFAULT_CATEGORIES), "recent": [], "conns": 8, "show_complete": True,
          "max_active": MAX_ACTIVE, "speed_limit_kbps": 0, "close_to_tray": True, "monitor_clipboard": False,
-         "show_cats": True, "columns": list(DEFAULT_COLS), "sort": {"col": None, "desc": False},
+         "show_cats": True, "show_donate": True, "columns": list(DEFAULT_COLS), "sort": {"col": None, "desc": False},
          "schedule": copy.deepcopy(DEFAULT_SCHEDULE),
          "clip_auto": False, "browsers": copy.deepcopy(DEFAULT_BROWSERS), "keys": dict(DEFAULT_KEYS),
          "menu": dict(DEFAULT_MENU), "menu_title": DEFAULT_MENU_TITLE,
@@ -287,7 +287,7 @@ def load_cfg():
         k = j.get("speed_limit_kbps")
         if isinstance(k, int) and 0 <= k <= 10_000_000:
             s["speed_limit_kbps"] = k
-        for key in ("close_to_tray", "monitor_clipboard", "show_cats"):
+        for key in ("close_to_tray", "monitor_clipboard", "show_cats", "show_donate"):
             if key in j:
                 s[key] = bool(j[key])
         if isinstance(j.get("columns"), list):
@@ -1799,6 +1799,9 @@ class InfoDialog:
         self.icon = tk.Canvas(side, width=54, height=66, highlightthickness=0, bd=0, bg=bg)
         self.icon.pack(pady=(4, 0))
         ttk.Label(side, textvariable=self.size_var, anchor="center", width=14).pack(pady=(4, 0))
+        qr = donate_box(side, app)
+        if qr is not None:
+            qr.pack(pady=(14, 0))
 
         # Descrição
         ttk.Label(f, text="Descrição").grid(row=4, column=0, sticky="w", pady=(8, 3))
@@ -2078,6 +2081,9 @@ class ProgressDialog:
                                         ("Capacidade de continuar", "cap")), start=2):
             tk.Label(box, text=txt, bg="white", anchor="w").grid(row=i, column=0, sticky="w")
             tk.Label(box, textvariable=self.v[key], bg="white", anchor="w").grid(row=i, column=1, sticky="w")
+        qr = donate_box(box, app, fundo="white")
+        if qr is not None:
+            qr.grid(row=2, column=1, rowspan=5, sticky="e")
 
         ui = app.settings["progress_ui"]
         if ui["speed_tab"]:
@@ -2350,6 +2356,9 @@ class CompleteDialog:
         tx.pack(side="left", padx=12)
         ttk.Label(tx, text="Download completo", font=("Segoe UI", 10, "bold")).pack(anchor="w")
         ttk.Label(tx, text=f"Baixado {pt(fmt_size(size, 2))} ({size} Bytes)").pack(anchor="w", pady=(4, 0))
+        qr = donate_box(top, app)
+        if qr is not None:
+            qr.pack(side="right")
 
         ttk.Label(f, text="Endereço:").pack(anchor="w", pady=(12, 2))
         ttk.Entry(f, state="readonly", textvariable=self.url_var, width=70).pack(fill="x")
@@ -3283,11 +3292,11 @@ def qr_matriz(texto, mascara=None):
     return mod
 
 
-def qr_png(texto, borda=4):
+def qr_png(texto, borda=4, escala=None):
     """PNG do QR code (módulos pretos em fundo branco, com a margem de silêncio exigida pelos leitores)."""
     m = qr_matriz(texto)
     n = len(m)
-    esc = max(3, 330 // (n + 2 * borda))
+    esc = escala or max(3, 330 // (n + 2 * borda))
     dim = (n + 2 * borda) * esc
     branco, preto = b"\xff\xff\xff\xff", b"\x00\x00\x00\xff"
     margem = branco * (borda * esc)
@@ -3303,11 +3312,11 @@ class DonateDialog:
     """"Apoiar o Raio": QR code do Pix, o código "copia e cola" e, se houver, o link de apoio.
     O QR é gerado aqui mesmo, sem internet e sem enviar nada a ninguém."""
 
-    def __init__(self, app):
+    def __init__(self, app, pai=None):
         self.app = app
         win = self.win = tk.Toplevel(app.root)
         win.title("Apoiar o Raio")
-        win.transient(app.root)
+        win.transient(pai or app.root)
         win.resizable(False, False)
         win.bind("<Escape>", lambda e: win.destroy())
         f = ttk.Frame(win, padding=16)
@@ -3336,6 +3345,8 @@ class DonateDialog:
         if DONATE_URL:
             ttk.Button(f, text="Abrir página de apoio", command=self.abrir).pack(pady=(8, 0))
         ttk.Button(f, text="Fechar", command=win.destroy).pack(pady=(12, 0))
+        win.lift()
+        win.focus_force()
 
     def copiar(self):
         self.win.clipboard_clear()
@@ -3345,6 +3356,43 @@ class DonateDialog:
     def abrir(self):
         import webbrowser
         webbrowser.open(DONATE_URL)
+
+
+_DOACAO_IMG = {}
+
+
+def _donate_img():
+    """Imagem do QR do Pix (uma só, reaproveitada por todas as janelas)."""
+    if "qr" not in _DOACAO_IMG:
+        png, _ = qr_png(pix_payload(PIX_KEY, PIX_NAME, PIX_CITY), borda=2, escala=3)
+        _DOACAO_IMG["qr"] = tk.PhotoImage(data=base64.b64encode(png))
+    return _DOACAO_IMG["qr"]
+
+
+def donate_box(pai, app, fundo=None):
+    """Quadro com o QR do Pix e "Apoie o Raio" (clicar abre o QR grande e o código copia e cola).
+    Devolve None se não houver chave Pix ou se o usuário desligou nas Opções."""
+    if not PIX_KEY or not app.settings.get("show_donate", True):
+        return None
+    try:
+        img = _donate_img()
+    except Exception as ex:
+        log(f"Apoiar: QR indisponível: {ex!r}")
+        return None
+    if fundo is None:
+        try:
+            fundo = ttk.Style().lookup("TFrame", "background") or "#f0f0f0"
+        except tk.TclError:
+            fundo = "#f0f0f0"
+    box = tk.Frame(pai, bg=fundo)
+    qr = tk.Label(box, image=img, bg="white", bd=1, relief="solid", padx=6, pady=6)   # branco = margem de silêncio
+    qr.pack()
+    tx = tk.Label(box, text="Apoie o Raio com um Pix", bg=fundo, fg="#0b57d0", font=("Segoe UI", 8, "underline"))
+    tx.pack(pady=(3, 0))
+    for w in (box, qr, tx):
+        w.configure(cursor="hand2")
+        w.bind("<Button-1>", lambda e: DonateDialog(app, pai=box.winfo_toplevel()))
+    return box
 
 
 class ExtensionDialog:
@@ -3503,6 +3551,7 @@ class OptionsDialog:
         self.v_tray = tk.BooleanVar(value=s["close_to_tray"])
         self.v_auto = tk.BooleanVar(value=autostart_get())
         self.v_auto0 = self.v_auto.get()
+        self.v_donate = tk.BooleanVar(value=s.get("show_donate", True))
 
         for txt, var, hi in (("Conexões por download:", self.v_conns, 32), ("Downloads simultâneos:", self.v_max, 10)):
             r = ttk.Frame(g)
@@ -3529,6 +3578,9 @@ class OptionsDialog:
         ttk.Checkbutton(lf, text="Ao fechar a janela, continuar na bandeja do sistema" +
                         ("" if app.tray else "  (indisponível: sem pystray/pillow)"),
                         variable=self.v_tray, state="normal" if app.tray else "disabled").pack(anchor="w", pady=1)
+        if PIX_KEY:
+            ttk.Checkbutton(lf, text="Mostrar o QR de apoio (Pix) na janela principal e nas janelas de download",
+                            variable=self.v_donate).pack(anchor="w", pady=1)
         self.clip_state()
 
         bf = ttk.LabelFrame(g, text="Capturar downloads nos seguintes navegadores:", padding=6)
@@ -3967,6 +4019,8 @@ class OptionsDialog:
         s["show_complete"] = bool(self.v_notify.get())
         if app.tray:
             s["close_to_tray"] = bool(self.v_tray.get())
+        s["show_donate"] = bool(self.v_donate.get())
+        app.update_donate_main()
 
         # integração com o navegador
         s["browsers"] = copy.deepcopy(self.browsers)
@@ -4314,6 +4368,8 @@ class App:
         self.cat_tree = ttk.Treeview(self.left, show="tree", selectmode="browse")
         self.cat_tree.pack(fill="both", expand=True)
         self.cat_tree.bind("<<TreeviewSelect>>", self.on_cat_select)
+        self.donate_main = None
+        self.update_donate_main()
         self.rebuild_categories()
 
         self.right = ttk.Frame(self.pw)
@@ -4356,6 +4412,16 @@ class App:
             self._sash_pending = False
         except tk.TclError:
             pass
+
+    def update_donate_main(self):
+        """QR de apoio no fim do painel de categorias (some se o painel estiver oculto ou a opção desligada)."""
+        if getattr(self, "donate_main", None) is not None:
+            self.donate_main.destroy()
+            self.donate_main = None
+        box = donate_box(self.left, self)
+        if box is not None:
+            box.pack(side="bottom", fill="x", pady=8, before=self.cat_tree)
+            self.donate_main = box
 
     def toggle_cats(self, show):
         self.settings["show_cats"] = bool(show)
