@@ -34,7 +34,25 @@ import ssl
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox, simpledialog
 
-APP_DIR = os.path.join(os.path.expanduser("~"), ".pydm")
+def _pasta_de_dados():
+    """~/.raio (nome atual). Quem usava a versão com o nome antigo tem ~/.pydm: a pasta é renomeada na primeira
+    abertura, mantendo a lista de downloads, as configurações e os componentes de vídeo. Se não der para renomear
+    (algum arquivo em uso, falta de permissão), o Raio continua usando a pasta antiga, sem perder nada."""
+    home = os.path.expanduser("~")
+    novo, velho = os.path.join(home, ".raio"), os.path.join(home, ".pydm")
+    if not os.path.exists(novo) and os.path.isdir(velho):
+        try:
+            os.rename(velho, novo)
+        except OSError:
+            return velho
+        try:
+            os.replace(os.path.join(novo, "pydm.log"), os.path.join(novo, "raio.log"))
+        except OSError:
+            pass
+    return novo
+
+
+APP_DIR = _pasta_de_dados()
 DB = os.path.join(APP_DIR, "downloads.json")
 CFG = os.path.join(APP_DIR, "settings.json")
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0 Safari/537.36"
@@ -137,10 +155,10 @@ def fmt_time(s):
 
 
 def log(msg):
-    """Registro simples em ~/.pydm/pydm.log (ajuda a descobrir por que algo não funcionou)."""
+    """Registro simples em ~/.raio/raio.log (ajuda a descobrir por que algo não funcionou)."""
     try:
         os.makedirs(APP_DIR, exist_ok=True)
-        with open(os.path.join(APP_DIR, "pydm.log"), "a", encoding="utf-8") as f:
+        with open(os.path.join(APP_DIR, "raio.log"), "a", encoding="utf-8") as f:
             f.write(time.strftime("%Y-%m-%d %H:%M:%S  ") + msg + "\n")
     except OSError:
         pass
@@ -996,14 +1014,14 @@ TRAY_EVENTS = queue.Queue()  # eventos do menu da bandeja (vêm de outra thread)
 # ====================================================================================
 #  Vídeo e áudio de páginas (botão "Baixar este vídeo" da extensão)
 #  O Raio não extrai vídeos sozinho: ele usa o yt-dlp (extrai/baixa) com o ffmpeg (junta e converte)
-#  e o Deno (necessário para o YouTube). Os três ficam em ~/.pydm/bin ou no PATH.
+#  e o Deno (necessário para o YouTube). Os três ficam em ~/.raio/bin ou no PATH.
 # ====================================================================================
 class MediaError(Exception):
     pass
 
 
 def find_tool(name, custom=""):
-    """Localiza yt-dlp / ffmpeg / deno: caminho das Opções, depois ~/.pydm/bin, depois o PATH."""
+    """Localiza yt-dlp / ffmpeg / deno: caminho das Opções, depois ~/.raio/bin, depois o PATH."""
     if custom and os.path.isfile(custom):
         return custom
     exe = name + (".exe" if sys.platform.startswith("win") else "")
@@ -2903,7 +2921,7 @@ class AntivirusDialog(SubDialog):
 
 
 class ComponentInstaller:
-    """Baixa yt-dlp, Deno e ffmpeg para ~/.pydm/bin (só Windows) mostrando o progresso."""
+    """Baixa yt-dlp, Deno e ffmpeg para ~/.raio/bin (só Windows) mostrando o progresso."""
     LABEL = {"yt-dlp": "yt-dlp (extrai os vídeos dos sites)",
              "deno": "Deno (necessário para o YouTube)",
              "ffmpeg": "ffmpeg (junta vídeo e áudio e converte para MP3/WAV)"}
@@ -3399,8 +3417,9 @@ def donate_box(pai, app, fundo=None):
 APP_NAME = "Raio Gerenciador de Downloads"
 APP_VERSION = "1.0"                 # mantenha igual ao AppVersion do installer.iss e ao version_info.txt
 APP_AUTHOR = "Willian Soares"       # aparece em Ajuda > Sobre; deixe "" para não mostrar
-APP_SITE = "https://github.com/WillianSoares93/RaioGD"
-APP_PRIVACY = APP_SITE + "/blob/main/PRIVACIDADE.md"
+# Quando o site do Raio existir, preencha os dois endereços abaixo: os botões aparecem sozinhos em Ajuda > Sobre.
+APP_SITE = ""        # página do projeto (ex.: https://...)
+APP_PRIVACY = ""     # política de privacidade (ex.: https://.../privacidade)
 
 
 class AboutDialog:
@@ -3482,7 +3501,11 @@ class AboutDialog:
         return "\n".join(itens)
 
     def links(self):
-        out = [("Página do projeto", APP_SITE), ("Política de privacidade", APP_PRIVACY)]
+        out = []
+        if APP_SITE:
+            out.append(("Página do projeto", APP_SITE))
+        if APP_PRIVACY:
+            out.append(("Política de privacidade", APP_PRIVACY))
         if CHROME_EXT_ID:
             out.append(("Extensão na loja", CHROME_STORE_URL.format(CHROME_EXT_ID)))
         return out
@@ -4017,7 +4040,7 @@ class OptionsDialog:
             ttk.Label(r, text=text, width=9).pack(side="left")
             ttk.Entry(r, textvariable=var).pack(side="left", fill="x", expand=True)
             ttk.Button(r, text="...", width=3, command=lambda v=var: self.pick_tool(v)).pack(side="left", padx=(6, 0))
-        ttk.Label(cf, text="Em branco = o Raio procura sozinho (pasta .pydm\\bin ou PATH).",
+        ttk.Label(cf, text="Em branco = o Raio procura sozinho (pasta .raio\\bin ou PATH).",
                   foreground="#555555").pack(anchor="w", pady=(2, 6))
         r = ttk.Frame(cf)
         r.pack(fill="x")
@@ -4182,7 +4205,7 @@ class OptionsDialog:
             else:
                 self.v_auto.set(self.v_auto0)
                 messagebox.showerror("Raio", "Não foi possível alterar o início automático com o Windows.\n"
-                                             "Detalhes em ~/.pydm/pydm.log.", parent=self.win)
+                                             "Detalhes em ~/.raio/raio.log.", parent=self.win)
 
         save_cfg(s)
         app.apply_runtime()
@@ -4984,7 +5007,7 @@ class App:
         elif code != 0:
             messagebox.showwarning("Verificação contra vírus",
                                    f"O verificador retornou o código {code} para:\n{name}\n\n"
-                                   "O arquivo pode ser perigoso. Veja os detalhes em ~/.pydm/pydm.log.",
+                                   "O arquivo pode ser perigoso. Veja os detalhes em ~/.raio/raio.log.",
                                    parent=self.root)
 
     # ---------- iniciar / parar ----------
@@ -5524,7 +5547,7 @@ class App:
     # ---------- bandeja do sistema ----------
     def start_tray(self):
         """Cria o ícone da bandeja. Se não der (falta pystray/Pillow, sistema sem suporte...),
-        self.tray fica None, o motivo vai para self.tray_error e para o pydm.log."""
+        self.tray fica None, o motivo vai para self.tray_error e para o raio.log."""
         self.tray, self.tray_error, self.tray_missing = None, "", False
         if sys.platform == "darwin":   # no macOS o pystray briga com o laço de eventos do Tk
             self.tray_error = "a bandeja não é suportada no macOS"
@@ -5616,7 +5639,7 @@ class App:
         frozen = getattr(sys, "frozen", False)   # True quando roda como .exe (PyInstaller)
         head = ("Não foi possível manter o Raio na bandeja do sistema.\n\n"
                 f"Motivo: {self.tray_error or 'desconhecido'}\n"
-                f"(detalhes em {os.path.join(APP_DIR, 'pydm.log')})\n\n")
+                f"(detalhes em {os.path.join(APP_DIR, 'raio.log')})\n\n")
         if self.tray_missing and not frozen:
             r = messagebox.askyesnocancel(
                 "Bandeja indisponível", head +
@@ -5717,7 +5740,7 @@ class App:
 def install_components_cli():
     """Raio.exe --install-components: chamado pelo instalador (installer.iss) no fim da instalação.
     Abre só a janela de progresso do ComponentInstaller (sem a janela principal) e baixa o que faltar
-    em ~/.pydm/bin. Se já estiver tudo instalado, não faz nada."""
+    em ~/.raio/bin. Se já estiver tudo instalado, não faz nada."""
     if not sys.platform.startswith("win"):
         return
     from types import SimpleNamespace
