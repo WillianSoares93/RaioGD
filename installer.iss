@@ -77,7 +77,7 @@ brazilianportuguese.FinishedLabelNoIcons=O [name] foi instalado.%n%nPara termina
 #endif
 
 [Run]
-; roda como o usuário que abriu o instalador (e não como o administrador): os componentes vão para a pasta .pydm dele
+; roda como o usuário que abriu o instalador (e não como o administrador): os componentes vão para a pasta .raio dele
 Filename: "{app}\Raio.exe"; Parameters: "--install-components"; StatusMsg: "Baixando os componentes de vídeo..."; Tasks: videocomponents; Flags: runasoriginaluser skipifsilent
 ; Chrome e Edge não deixam instaladores colocarem extensões sozinhos: este passo a passo leva o usuário até a pasta certa.
 ; Também como o usuário original (abrir o navegador como administrador não é desejável).
@@ -91,8 +91,9 @@ Filename: "{app}\Raio.exe"; Description: "Abrir o Raio"; Flags: nowait postinsta
 
 [Code]
 // Ao desinstalar: fecha o Raio (senão o Raio.exe fica em uso), apaga os componentes de vídeo baixados
-// (yt-dlp, Deno, ffmpeg em %USERPROFILE%\.pydm\bin) e remove o "iniciar com o Windows".
-// A lista de downloads e as configurações (%USERPROFILE%\.pydm) são mantidas.
+// (yt-dlp, Deno, ffmpeg em %USERPROFILE%\.raio\bin) e remove o "iniciar com o Windows".
+// A lista de downloads e as configurações (%USERPROFILE%\.raio) são mantidas.
+// (.pydm é o nome antigo da pasta: o Raio a renomeia sozinho para .raio, mas limpamos as duas por garantia.)
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
 var
   ResultCode: Integer;
@@ -101,7 +102,8 @@ begin
   begin
     Exec(ExpandConstant('{sys}\taskkill.exe'), '/F /T /IM Raio.exe', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
     Sleep(800);
-    DelTree(ExpandConstant('{%USERPROFILE}') + '\.pydm\bin', True, True, True);
+    DelTree(ExpandConstant('{%USERPROFILE}') + '\.raio\bin', True, True, True);
+    DelTree(ExpandConstant('{%USERPROFILE}') + '\.pydm\bin', True, True, True);   // nome antigo da pasta
     RegDeleteValue(HKCU, 'Software\Microsoft\Windows\CurrentVersion\Run', 'Raio');
     RegDeleteValue(HKCU, 'Software\Microsoft\Windows\CurrentVersion\Run', 'PyDM');   // nome usado antes da troca de nome
   end;
