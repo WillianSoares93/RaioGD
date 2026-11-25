@@ -2550,6 +2550,17 @@ class Tooltip:
             self.tip = None
 
 
+def ico_puzzle(c, cx, cy, on):
+    """Peça de quebra-cabeça: o símbolo das extensões do navegador."""
+    k, fill = _fc(on, "#2f7d5b"), _fc(on, "#cfeede", "#efefef")
+    pts = [(-11, -8), (-6, -8)]
+    pts += [(-1 + 5 * math.cos(t), -8 - 5 * math.sin(t)) for t in (math.pi - i * math.pi / 12 for i in range(1, 12))]
+    pts += [(4, -8), (9, -8), (9, -4)]
+    pts += [(9 + 5 * math.cos(t), 1 + 5 * math.sin(t)) for t in (-math.pi / 2 + i * math.pi / 12 for i in range(1, 12))]
+    pts += [(9, 6), (9, 11), (-11, 11)]
+    c.create_polygon([v for x, y in pts for v in (cx + x, cy + 1 + y)], fill=fill, outline=k, width=2)
+
+
 class ToolButton(tk.Canvas):
     """Botão grande da barra de ferramentas: ícone + texto embaixo, com destaque ao passar o mouse.
     Se receber 'menu', mostra uma setinha à direita que abre uma lista de opções."""
@@ -4468,6 +4479,7 @@ class App:
             "Iniciar a fila principal", menu=lambda: self.queue_menu(True))
         btn("stopq", "Parar fila", lambda c, x, y, on: ico_queue(c, x, y, on, "stop"), self.stop_queue,
             "Parar a fila principal", menu=lambda: self.queue_menu(False))
+        btn("ext", "Extensão", ico_puzzle, self.extension_dialog, "Instalar a extensão do navegador (Chrome e Edge)")
         ttk.Separator(self.root).pack(fill="x")
 
     def queue_menu(self, start):
