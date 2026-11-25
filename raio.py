@@ -330,6 +330,10 @@ def load_cfg():
         for key in ("manual_ua", "menu_title"):
             if isinstance(j.get(key), str) and j[key].strip():
                 s[key] = j[key].strip()
+        # o programa já se chamou PyDM: quem tinha o título antigo salvo passa para o nome atual (títulos escolhidos
+        # pelo usuário, como "Baixar com meu gerenciador", são mantidos)
+        if re.fullmatch(r"baixar com (o )?pydm", s["menu_title"].strip(), re.I):
+            s["menu_title"] = DEFAULT_MENU_TITLE
         for key in ("capture_exts", "exclude_sites", "exclude_addrs"):
             if isinstance(j.get(key), list):
                 s[key] = [str(x).strip() for x in j[key] if str(x).strip()]
