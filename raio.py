@@ -1063,6 +1063,21 @@ def _last_error(text):
     return msg[:220]
 
 
+_EXTRA_HDR = re.compile(r"(?i)^(authorization|origin|x-[a-z0-9-]{1,40})$")
+
+
+def extra_headers(raw):
+    """Cabeçalhos de autorização que o player do site mandou (Authorization, Origin, X-...), enviados pela extensão
+    para o Raio repetir o pedido igual ao do navegador. Só esses nomes são aceitos, em número e tamanho limitados."""
+    out = {}
+    if isinstance(raw, dict):
+        for k, v in list(raw.items())[:12]:
+            k, v = re.sub(r"[\r\n]", "", str(k)).strip(), re.sub(r"[\r\n]", "", str(v)).strip()
+            if v and len(v) <= 8192 and _EXTRA_HDR.match(k):
+                out["-".join(p.capitalize() for p in k.split("-"))] = v
+    return out
+
+
 def ytdlp_base(s, url, headers=None):
     """Começo da linha de comando do yt-dlp (comum à análise e ao download)."""
     t = media_tools(s)
@@ -1080,6 +1095,9 @@ def ytdlp_base(s, url, headers=None):
                 cmd += ["--add-header", f"{key}:{headers[key]}"]
         if headers.get("User-Agent"):
             cmd += ["--user-agent", headers["User-Agent"]]
+        for key, val in headers.items():           # Authorization / Origin / X-... detectados pela extensão
+            if key not in ("Referer", "Cookie", "User-Agent") and val and _EXTRA_HDR.match(key):
+                cmd += ["--add-header", f"{key}:{val}"]
     return cmd
 
 
@@ -1470,7 +1488,7 @@ class Bridge(BaseHTTPRequestHandler):
         s = SETTINGS_REF["s"]
         try:
             n = int(self.headers.get("Content-Length", 0))
-            j = json.loads(self.rfile.read(min(n, 65536)))
+            j = json.loads(self.rfile.read(min(n, 262144)))
             url = str(j["url"]).strip()
             if not url.lower().startswith(("http://", "https://")):
                 return self._send(400, {"error": "url"})
@@ -1479,6 +1497,7 @@ class Bridge(BaseHTTPRequestHandler):
             for k, key in (("referrer", "Referer"), ("cookie", "Cookie"), ("userAgent", "User-Agent")):
                 if clean(j.get(k)):
                     h[key] = clean(j.get(k))
+            h.update(extra_headers(j.get("extra")))
             mid = str(j.get("id") or "")
             est = int(j.get("est") or 0) or None
             title = clean(j.get("title"))[:150]
@@ -1518,7 +1537,7 @@ class Bridge(BaseHTTPRequestHandler):
             return self._send(403)
         try:
             n = int(self.headers.get("Content-Length", 0))
-            j = json.loads(self.rfile.read(min(n, 65536)))
+            j = json.loads(self.rfile.read(min(n, 262144)))
             url = str(j["url"]).strip()
             if not url.lower().startswith(("http://", "https://")):
                 return self._send(400, {"error": "url"})
@@ -1527,6 +1546,7 @@ class Bridge(BaseHTTPRequestHandler):
             for k, key in (("referrer", "Referer"), ("cookie", "Cookie"), ("userAgent", "User-Agent")):
                 if clean(j.get(k)):
                     h[key] = clean(j.get(k))
+            h.update(extra_headers(j.get("extra")))
             s = SETTINGS_REF["s"]
             if s:
                 ok, why = capture_decision(s, url, clean(j.get("filename")), clean(j.get("userAgent")),
