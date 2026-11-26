@@ -280,20 +280,22 @@
       const l = el("span", "", sniffedLabel(s));
       l.title = s.url;
       row.append(l, el("span", "size", "analisar"));
-      row.addEventListener("click", (e) => { if (e.isTrusted) analyze(s.url); });
+      row.addEventListener("click", (e) => { if (e.isTrusted) analyze(s.url, s.id); });
       return row;
     }
-    const row = directRow(s.url, sniffedLabel(s) + " \u2014 " + shortName(s.url), fmtSize(s.size) || "direto", location.href);
+    const row = directRow(s.url, sniffedLabel(s) + " \u2014 " + shortName(s.url), fmtSize(s.size) || "direto", location.href, s.id);
     row.firstChild.title = s.url;
     return row;
   }
 
   // lista as qualidades de um stream (manifesto HLS/DASH) pelo yt-dlp, com o endereço da página como origem
-  async function analyze(url) {
+  let targetSid = "";   // id da mídia detectada que está sendo analisada (a extensão acha os cabeçalhos dela por esse id)
+  async function analyze(url, sid) {
     if (busy) return;
     const my = ++token;
+    targetSid = sid || "";
     showMessage("Baixar este vídeo", "Analisando o stream...");
-    const res = await send({ type: "media-formats", url, referrer: location.href });
+    const res = await send({ type: "media-formats", url, referrer: location.href, sid: targetSid });
     if (my !== token || !panelOpen) return;
     render(res, [], [], url);
   }
@@ -305,7 +307,7 @@
     return row;
   }
 
-  function directRow(u, label, tag, referrer) {
+  function directRow(u, label, tag, referrer, sid) {
     let ext = "";
     try { ext = (new URL(u).pathname.match(/\.([a-z0-9]{2,5})$/i) || [])[1] || ""; } catch (e) { /* ignora */ }
     const row = el("div", "row");
@@ -314,7 +316,7 @@
     row.addEventListener("click", async (e) => {
       if (!e.isTrusted || busy) return;
       busy = true;
-      const r = await send({ type: "download-direct", url: u, referrer: referrer || document.referrer || location.href });
+      const r = await send({ type: "download-direct", url: u, referrer: referrer || document.referrer || location.href, sid });
       busy = false;
       done(r && r.ok, "Adicionado ao Raio", r && r.message);
     });
@@ -371,7 +373,7 @@
     const title = ((target ? document.title : res.title) || document.title || "").replace(/ - YouTube$/, "");
     const r = await send({
       type: "media-download", url: target || location.href, referrer: target ? location.href : document.referrer,
-      id: opt.id, title, est: opt.size || 0
+      id: opt.id, title, est: opt.size || 0, sid: target ? targetSid : ""
     });
     busy = false;
     done(r && r.ok, "Adicionado ao Raio: " + opt.label, r && r.message);

@@ -99,6 +99,32 @@ function mergeSniffed(list, entry, now) {
   return out.slice(0, SNIFF_MAX);
 }
 
+// Sites de streaming costumam autenticar o pedido do vídeo com um token em cabeçalho (Authorization, X-...), que o
+// yt-dlp não tem. Guardamos só esses cabeçalhos do próprio pedido da página, na memória do service worker e, junto da
+// mídia, na storage.session; eles NUNCA vão para o script da página e só são enviados ao Raio (127.0.0.1) quando o
+// usuário escolhe baixar aquele item.
+const SNIFF_HDR = /^(authorization|origin|x-[a-z0-9-]{1,40})$/i;
+const canonHeader = (n) => n.toLowerCase().replace(/(^|-)([a-z])/g, (m, a, b) => a + b.toUpperCase());
+
+function pickHeaders(requestHeaders) {
+  const out = {};
+  for (const h of requestHeaders || []) {
+    if (h && h.name && h.value && SNIFF_HDR.test(h.name) && String(h.value).length <= 8192) out[canonHeader(h.name)] = String(h.value);
+  }
+  return out;
+}
+
+const pendingHdr = new Map();                 // requestId -> cabeçalhos (vive poucos segundos)
+chrome.webRequest.onSendHeaders.addListener((d) => {
+  if (d.tabId < 0) return;
+  const h = pickHeaders(d.requestHeaders);
+  if (Object.keys(h).length) {
+    pendingHdr.set(d.requestId, h);
+    setTimeout(() => pendingHdr.delete(d.requestId), 60000);
+  }
+}, { urls: ["http://*/*", "https://*/*"], types: ["media", "xmlhttprequest", "other"] }, ["requestHeaders", "extraHeaders"]);
+
+let sniffSeq = 0;
 let sniffQueue = Promise.resolve();
 async function sniffAdd(tabId, entry) {
   if (!(await isEnabled())) return;
@@ -110,7 +136,13 @@ async function sniffAdd(tabId, entry) {
 chrome.webRequest.onHeadersReceived.addListener((d) => {
   if (d.tabId < 0) return;
   const e = classifyMedia(d);
-  if (e) sniffQueue = sniffQueue.then(() => sniffAdd(d.tabId, e)).catch(() => {});
+  if (e) {
+    e.id = Date.now().toString(36) + "-" + (++sniffSeq);
+    const extra = pendingHdr.get(d.requestId);
+    if (extra) e.extra = extra;
+    sniffQueue = sniffQueue.then(() => sniffAdd(d.tabId, e)).catch(() => {});
+  }
+  pendingHdr.delete(d.requestId);
 }, { urls: ["http://*/*", "https://*/*"], types: ["media", "xmlhttprequest", "other"] }, ["responseHeaders"]);
 
 // página nova na aba = lista nova (mudar de rota sem recarregar, como nos sites de streaming, não limpa)
@@ -118,6 +150,15 @@ chrome.tabs.onUpdated.addListener((tabId, info) => {
   if (info.status === "loading") chrome.storage.session.remove("sn:" + tabId).catch(() => {});
 });
 chrome.tabs.onRemoved.addListener((tabId) => { chrome.storage.session.remove("sn:" + tabId).catch(() => {}); });
+
+// Cabeçalhos de autorização guardados para uma mídia detectada nesta aba (vazio se não houver).
+async function sniffedExtra(sender, msg) {
+  if (!sender || !sender.tab || !msg) return {};
+  const k = "sn:" + sender.tab.id;
+  const list = (await chrome.storage.session.get(k))[k] || [];
+  const e = list.find((x) => (msg.sid && x.id === msg.sid) || x.url === msg.url);
+  return e && e.extra ? e.extra : {};
+}
 
 // ---------- mensagens dos scripts das páginas (keys.js e video.js) ----------
 async function pydmJson(path, body, timeoutMs) {
@@ -159,9 +200,11 @@ const HANDLERS = {
     }
   },
   // lista as qualidades de vídeo e os formatos de áudio (o Raio roda o yt-dlp; pode levar alguns segundos)
-  "media-formats": async (msg) => pydmJson("/media/formats", await pageInfo(msg), 120000),
-  "media-download": async (msg) => pydmJson("/media/download", {
-    ...(await pageInfo(msg)), id: String(msg.id || ""), title: String(msg.title || ""), est: Number(msg.est) || 0
+  "media-formats": async (msg, sender) => pydmJson("/media/formats",
+    { ...(await pageInfo(msg)), extra: await sniffedExtra(sender, msg) }, 120000),
+  "media-download": async (msg, sender) => pydmJson("/media/download", {
+    ...(await pageInfo(msg)), id: String(msg.id || ""), title: String(msg.title || ""), est: Number(msg.est) || 0,
+    extra: await sniffedExtra(sender, msg)
   }, 10000),
   // endereços de vídeo/áudio/stream que a página pediu na rede (para sites que o yt-dlp não reconhece)
   "media-sniffed": async (msg, sender) => {
@@ -171,11 +214,12 @@ const HANDLERS = {
     const now = Date.now();
     const list = ((await chrome.storage.session.get(k))[k] || [])
       .filter((e) => now - e.t < SNIFF_TTL && (e.n || 1) < SNIFF_SERIES);
-    return { list: list.map(({ url, kind, mime, size, ext, t }) => ({ url, kind, mime, size, ext, t })) };
+    return { list: list.map(({ id, url, kind, mime, size, ext, t }) => ({ id, url, kind, mime, size, ext, t })) };
   },
   // arquivo de vídeo com endereço direto: baixa pelo motor normal do Raio
-  "download-direct": async (msg) => {
-    const ok = await sendToPyDM(String(msg.url || ""), String(msg.referrer || ""), { manual: true });
+  "download-direct": async (msg, sender) => {
+    const ok = await sendToPyDM(String(msg.url || ""), String(msg.referrer || ""),
+      { manual: true, extra: await sniffedExtra(sender, msg) });
     return { ok };
   }
 };
@@ -271,5 +315,5 @@ chrome.contextMenus.onClicked.addListener(async (info) => {
 
 // gancho de teste (não existe no navegador)
 if (globalThis.__PYDM_TEST__) {
-  Object.assign(globalThis.__PYDM_TEST__, { classifyMedia, mergeSniffed, headerOf, HANDLERS, SNIFF_MAX, SNIFF_TTL, SNIFF_SERIES });
+  Object.assign(globalThis.__PYDM_TEST__, { classifyMedia, mergeSniffed, headerOf, HANDLERS, SNIFF_MAX, SNIFF_TTL, SNIFF_SERIES, pickHeaders, sniffedExtra });
 }
