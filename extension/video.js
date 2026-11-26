@@ -246,52 +246,113 @@
     const my = ++token;
     const res = await send({ type: "media-formats", url: location.href, referrer: document.referrer });
     if (my !== token || !panelOpen) return;   // o painel foi fechado ou reaberto enquanto analisava
-    render(res, directSources(v, location.href));
+    // se o yt-dlp não reconhece a página, oferece o que ela pediu na rede (vídeo, áudio e streams HLS/DASH)
+    const failed = !res || res.ok === false || !((res.video || []).length || (res.audio || []).length);
+    const sniffed = failed ? await sniffedList() : [];
+    if (my !== token || !panelOpen) return;
+    render(res, directSources(v, location.href), sniffed);
   }
 
-  function optionRow(res, opt) {
-    const row = el("div", "row");
-    row.append(el("span", "", opt.label), el("span", "size", fmtSize(opt.size)));
-    row.addEventListener("click", (e) => { if (e.isTrusted) pick(res, opt); });
+  async function sniffedList() {
+    const r = await send({ type: "media-sniffed" });
+    return (r && Array.isArray(r.list)) ? r.list : [];
+  }
+
+  // "https://cdn/x/arquivo%20um.mp4?t=1" -> "arquivo um.mp4"
+  function shortName(u) {
+    try {
+      const a = new URL(u);
+      const last = decodeURIComponent(a.pathname.split("/").filter(Boolean).pop() || "");
+      const name = last || a.hostname;
+      return name.length > 30 ? name.slice(0, 27) + "..." : name;
+    } catch (e) { return ""; }
+  }
+
+  function sniffedLabel(s) {
+    if (s.kind === "manifest") return "Stream " + (s.ext === "m3u8" ? "HLS" : "DASH") + " (qualidades)";
+    const audio = /^audio\//.test(s.mime || "");
+    return (audio ? "Áudio" : "Vídeo") + (s.ext ? " " + s.ext.toUpperCase() : "");
+  }
+
+  function sniffedRow(s) {
+    if (s.kind === "manifest") {
+      const row = el("div", "row");
+      const l = el("span", "", sniffedLabel(s));
+      l.title = s.url;
+      row.append(l, el("span", "size", "analisar"));
+      row.addEventListener("click", (e) => { if (e.isTrusted) analyze(s.url); });
+      return row;
+    }
+    const row = directRow(s.url, sniffedLabel(s) + " \u2014 " + shortName(s.url), fmtSize(s.size) || "direto", location.href);
+    row.firstChild.title = s.url;
     return row;
   }
 
-  function directRow(u) {
+  // lista as qualidades de um stream (manifesto HLS/DASH) pelo yt-dlp, com o endereço da página como origem
+  async function analyze(url) {
+    if (busy) return;
+    const my = ++token;
+    showMessage("Baixar este vídeo", "Analisando o stream...");
+    const res = await send({ type: "media-formats", url, referrer: location.href });
+    if (my !== token || !panelOpen) return;
+    render(res, [], [], url);
+  }
+
+  function optionRow(res, opt, target) {
+    const row = el("div", "row");
+    row.append(el("span", "", opt.label), el("span", "size", fmtSize(opt.size)));
+    row.addEventListener("click", (e) => { if (e.isTrusted) pick(res, opt, target); });
+    return row;
+  }
+
+  function directRow(u, label, tag, referrer) {
     let ext = "";
     try { ext = (new URL(u).pathname.match(/\.([a-z0-9]{2,5})$/i) || [])[1] || ""; } catch (e) { /* ignora */ }
     const row = el("div", "row");
-    row.append(el("span", "", "Arquivo do vídeo" + (ext ? " (" + ext.toUpperCase() + ")" : "")), el("span", "size", "direto"));
+    row.append(el("span", "", label || "Arquivo do vídeo" + (ext ? " (" + ext.toUpperCase() + ")" : "")),
+      el("span", "size", tag || "direto"));
     row.addEventListener("click", async (e) => {
       if (!e.isTrusted || busy) return;
       busy = true;
-      const r = await send({ type: "download-direct", url: u, referrer: document.referrer || location.href });
+      const r = await send({ type: "download-direct", url: u, referrer: referrer || document.referrer || location.href });
       busy = false;
       done(r && r.ok, "Adicionado ao Raio", r && r.message);
     });
     return row;
   }
 
-  function render(res, direct) {
-    if (!res || res.ok === false) {
-      const text = !res ? "Não consegui falar com o Raio. Ele está aberto?" :
+  function render(res, direct, sniffed, target) {
+    sniffed = sniffed || [];
+    const failed = !res || res.ok === false || !((res.video || []).length || (res.audio || []).length);
+    if (failed) {
+      const offline = !res || res.error === "offline";
+      let text = offline ? "Não consegui falar com o Raio. Ele está aberto?" :
         (res.message || "Não foi possível analisar este vídeo.");
+      if (!offline && /unsupported url/i.test(text)) text = "O Raio não reconheceu o vídeo pelo endereço desta página.";
       const parts = [header("Baixar este vídeo"), el("div", "msg err", text)];
       if (direct.length) {
         parts.push(el("div", "sec", "Arquivo da página"));
         direct.forEach((u) => parts.push(directRow(u)));
       }
+      if (sniffed.length) {
+        parts.push(el("div", "sec", "Detectados na página"));
+        sniffed.forEach((s) => parts.push(sniffedRow(s)));
+      } else if (!offline && !direct.length && target == null) {
+        parts.push(el("div", "warn", "Dê play no vídeo e abra este painel de novo: o Raio detecta o endereço do vídeo " +
+          "enquanto a página o carrega."));
+      }
       panel.replaceChildren(...parts);
       return;
     }
-    const parts = [header(res.title || document.title || "Baixar este vídeo")];
+    const parts = [header((target ? document.title : res.title) || document.title || "Baixar este vídeo")];
     if (res.live) parts.push(el("div", "warn", "Esta página parece uma transmissão ao vivo; o download pode não terminar."));
     if (res.video.length) {
       parts.push(el("div", "sec", "Vídeo"));
-      res.video.forEach((o) => parts.push(optionRow(res, o)));
+      res.video.forEach((o) => parts.push(optionRow(res, o, target)));
     }
     if (res.audio.length) {
       parts.push(el("div", "sec", "Somente áudio"));
-      res.audio.forEach((o) => parts.push(optionRow(res, o)));
+      res.audio.forEach((o) => parts.push(optionRow(res, o, target)));
     }
     if (!res.ffmpeg) {
       parts.push(el("div", "warn", "Sem o ffmpeg só aparecem as qualidades que já trazem som e não dá para " +
@@ -304,12 +365,12 @@
     panel.replaceChildren(...parts);
   }
 
-  async function pick(res, opt) {
+  async function pick(res, opt, target) {
     if (busy) return;
     busy = true;
-    const title = (res.title || document.title || "").replace(/ - YouTube$/, "");
+    const title = ((target ? document.title : res.title) || document.title || "").replace(/ - YouTube$/, "");
     const r = await send({
-      type: "media-download", url: location.href, referrer: document.referrer,
+      type: "media-download", url: target || location.href, referrer: target ? location.href : document.referrer,
       id: opt.id, title, est: opt.size || 0
     });
     busy = false;
@@ -363,7 +424,7 @@
   // gancho de teste (não existe no navegador)
   if (globalThis.__PYDM_TEST__) {
     Object.assign(globalThis.__PYDM_TEST__, {
-      fmtSize, pageSupported, directSources, show, openPanel, closePanel, hideAll, place,
+      fmtSize, pageSupported, directSources, shortName, sniffedLabel, show, openPanel, closePanel, hideAll, place,
       state: () => ({ host, panel, btn, current, panelOpen })
     });
   }

@@ -39,6 +39,86 @@ chrome.action.onClicked.addListener(async () => {
   refreshBadge();
 });
 
+// ---------- mídias detectadas na rede (como o IDM): vídeos, áudios e listas HLS/DASH que a página pediu ----------
+// O yt-dlp não conhece todos os sites. Aqui a extensão guarda os endereços de mídia que a própria página pediu para
+// o painel "Baixar este vídeo" oferecê-los quando o yt-dlp não reconhece o endereço da página. Só olha o tipo e o
+// tamanho das respostas; a lista de cada aba fica na memória do navegador (storage.session) e some ao navegar.
+const SNIFF_MAX = 25;                      // endereços guardados por aba
+const SNIFF_MIN_BYTES = 300 * 1024;        // arquivos menores são pedaços de stream, propagandas e ícones
+const SNIFF_SEGMENT_BYTES = 4 * 1024 * 1024;   // abaixo disso, arquivos "numerados" (seg-1, seg-2...) contam como um só
+const SNIFF_SERIES = 3;                    // 3 ou mais arquivos com o mesmo padrão numerado = pedaços de um stream: não são listados
+const SNIFF_TTL = 30 * 60 * 1000;
+const MEDIA_EXT = /\.(mp4|m4v|mov|webm|mkv|mp3|m4a|aac|flac|ogg|oga|opus|wav)$/i;
+const SEGMENT_EXT = /\.(ts|m4s|m4f|cmfv|cmfa|cmft)$/i;
+const SNIFF_SKIP_HOST = /(^|\.)(youtube\.com|youtu\.be|googlevideo\.com|ytimg\.com)$/i;   // o YouTube é com o yt-dlp
+
+function headerOf(headers, name) {
+  const h = (headers || []).find((x) => x && x.name && x.name.toLowerCase() === name);
+  return h && h.value ? String(h.value) : "";
+}
+
+// Resposta de rede -> {url, kind, mime, size, ext, key, t} se parecer um vídeo/áudio baixável; senão null.
+function classifyMedia(d, now) {
+  if (!d || (d.statusCode !== 200 && d.statusCode !== 206)) return null;
+  let u;
+  try { u = new URL(d.url); } catch (e) { return null; }
+  if (u.protocol !== "http:" && u.protocol !== "https:") return null;
+  if (SNIFF_SKIP_HOST.test(u.hostname)) return null;
+  const mime = headerOf(d.responseHeaders, "content-type").split(";")[0].trim().toLowerCase();
+  if (/^(text\/html|text\/javascript|application\/javascript|application\/json)$/.test(mime)) return null;
+  const path = u.pathname.toLowerCase();
+  const t = now || Date.now();
+  const base = u.origin + u.pathname;
+  if (/mpegurl|dash\+xml/.test(mime) || /\.(m3u8|mpd)$/.test(path)) {
+    const ext = /m3u8|mpegurl/.test(path + mime) ? "m3u8" : "mpd";
+    return { url: d.url, kind: "manifest", mime, size: 0, ext, key: base, t };
+  }
+  if (SEGMENT_EXT.test(path)) return null;                          // pedaços de HLS/DASH
+  const known = MEDIA_EXT.test(path);
+  const generic = mime === "" || mime === "application/octet-stream" || mime === "binary/octet-stream";
+  if (!/^(video|audio)\//.test(mime) && !(known && generic)) return null;
+  if (/^video\/(mp2t|iso\.segment)$/.test(mime)) return null;      // pedaços de HLS/DASH
+  const total = headerOf(d.responseHeaders, "content-range").match(/\/(\d+)\s*$/);   // 206: tamanho do arquivo inteiro
+  const size = total ? Number(total[1]) : (Number(headerOf(d.responseHeaders, "content-length")) || 0);
+  if (size && size < SNIFF_MIN_BYTES) return null;
+  if (!size && !known) return null;
+  const ext = (path.match(MEDIA_EXT) || [])[1] || (mime.split("/")[1] || "").replace(/^x-/, "");
+  // pedaços "numerados" de um mesmo stream viram uma entrada só (a mais recente)
+  const key = size && size < SNIFF_SEGMENT_BYTES ? base.replace(/\d+/g, "#") : base;
+  return { url: d.url, kind: "file", mime, size, ext: ext.toLowerCase(), key, base, n: 1, t };
+}
+
+// Acrescenta uma entrada à lista da aba: tira as velhas e a repetida (mesmo key), mais nova primeiro, no máximo SNIFF_MAX.
+function mergeSniffed(list, entry, now) {
+  const t = now || Date.now();
+  const prev = (list || []).find((e) => e.key === entry.key);
+  // mesmo padrão numerado com endereços diferentes: conta quantos (uma série é um stream em pedaços)
+  const n = prev ? (prev.n || 1) + (prev.base && entry.base && prev.base !== entry.base ? 1 : 0) : (entry.n || 1);
+  const out = (list || []).filter((e) => t - e.t < SNIFF_TTL && e.key !== entry.key);
+  out.unshift({ ...entry, n });
+  return out.slice(0, SNIFF_MAX);
+}
+
+let sniffQueue = Promise.resolve();
+async function sniffAdd(tabId, entry) {
+  if (!(await isEnabled())) return;
+  const k = "sn:" + tabId;
+  const cur = (await chrome.storage.session.get(k))[k] || [];
+  await chrome.storage.session.set({ [k]: mergeSniffed(cur, entry) });
+}
+
+chrome.webRequest.onHeadersReceived.addListener((d) => {
+  if (d.tabId < 0) return;
+  const e = classifyMedia(d);
+  if (e) sniffQueue = sniffQueue.then(() => sniffAdd(d.tabId, e)).catch(() => {});
+}, { urls: ["http://*/*", "https://*/*"], types: ["media", "xmlhttprequest", "other"] }, ["responseHeaders"]);
+
+// página nova na aba = lista nova (mudar de rota sem recarregar, como nos sites de streaming, não limpa)
+chrome.tabs.onUpdated.addListener((tabId, info) => {
+  if (info.status === "loading") chrome.storage.session.remove("sn:" + tabId).catch(() => {});
+});
+chrome.tabs.onRemoved.addListener((tabId) => { chrome.storage.session.remove("sn:" + tabId).catch(() => {}); });
+
 // ---------- mensagens dos scripts das páginas (keys.js e video.js) ----------
 async function pydmJson(path, body, timeoutMs) {
   const ctrl = new AbortController();
@@ -83,6 +163,16 @@ const HANDLERS = {
   "media-download": async (msg) => pydmJson("/media/download", {
     ...(await pageInfo(msg)), id: String(msg.id || ""), title: String(msg.title || ""), est: Number(msg.est) || 0
   }, 10000),
+  // endereços de vídeo/áudio/stream que a página pediu na rede (para sites que o yt-dlp não reconhece)
+  "media-sniffed": async (msg, sender) => {
+    const tabId = sender && sender.tab ? sender.tab.id : null;
+    if (tabId == null) return { list: [] };
+    const k = "sn:" + tabId;
+    const now = Date.now();
+    const list = ((await chrome.storage.session.get(k))[k] || [])
+      .filter((e) => now - e.t < SNIFF_TTL && (e.n || 1) < SNIFF_SERIES);
+    return { list: list.map(({ url, kind, mime, size, ext, t }) => ({ url, kind, mime, size, ext, t })) };
+  },
   // arquivo de vídeo com endereço direto: baixa pelo motor normal do Raio
   "download-direct": async (msg) => {
     const ok = await sendToPyDM(String(msg.url || ""), String(msg.referrer || ""), { manual: true });
@@ -98,7 +188,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   }
   const handler = HANDLERS[msg.type];
   if (!handler) return;
-  handler(msg).then(sendResponse, () => sendResponse(OFFLINE));
+  handler(msg, sender).then(sendResponse, () => sendResponse(OFFLINE));
   return true;                              // resposta assíncrona
 });
 
@@ -178,3 +268,8 @@ chrome.contextMenus.onClicked.addListener(async (info) => {
   }
   setTimeout(refreshBadge, 3000);
 });
+
+// gancho de teste (não existe no navegador)
+if (globalThis.__PYDM_TEST__) {
+  Object.assign(globalThis.__PYDM_TEST__, { classifyMedia, mergeSniffed, headerOf, HANDLERS, SNIFF_MAX, SNIFF_TTL, SNIFF_SERIES });
+}
